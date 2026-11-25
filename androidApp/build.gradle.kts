@@ -15,6 +15,8 @@ android {
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionCode = build
         versionName = "1.0.$build"
+        // Modern phones are all 64-bit ARM. Shipping only that keeps the download small.
+        ndk { abiFilters += "arm64-v8a" }
     }
     // Fixed debug key (decoded by CI from debug.keystore.b64) so every build can
     // update the app already on the phone. Falls back to the normal debug key locally.
