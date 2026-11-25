@@ -61,6 +61,8 @@ jobs:
 
       # Every build becomes a GitHub release with the APK attached.
       - name: Publish GitHub release
+        # Only main becomes an update for users. Other branches just check that the app builds.
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
