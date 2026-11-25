@@ -41,6 +41,7 @@
 | 📂 **File manager** | Browse, move, rename and bin files. |
 | 👀 **Built-in viewer** | Photos, video, audio, PDF and text open inside the app. |
 | 🗄️ **NAS support** | Finds SMB drives on your Wi-Fi. Videos play straight from the NAS. |
+| 📱 **Free on-phone AI** | Runs a Gemma model on the phone itself. No key, no internet, nothing leaves the device. |
 | 🖼️ **Pictures in chat** | Attach a screenshot and ask about it. |
 | 🔄 **In-app updates** | The app tells you when a new build is ready. |
 
@@ -56,14 +57,15 @@ After that, updates arrive inside the app.
 
 Quick sort, the file manager and the viewer work with no setup.
 
-To chat with the AI, add your own key in **Settings → AI**:
+To chat with the AI, pick one in **Settings → AI**:
 
-| Provider | Get a key |
+| Choice | What you need |
 |---|---|
-| Claude | [console.anthropic.com](https://console.anthropic.com) |
-| DeepSeek | [platform.deepseek.com](https://platform.deepseek.com) |
+| **On phone** (free) | A one-time 2.6 GB download. Best on phones with 8 GB of memory or more. Good for simple jobs. |
+| Claude | Your own key from [console.anthropic.com](https://console.anthropic.com) |
+| DeepSeek | Your own key from [platform.deepseek.com](https://platform.deepseek.com) |
 
-The app loads the list of models from your provider and shows which ones can see pictures.
+For Claude and DeepSeek, the app loads the list of models and shows which ones can see pictures.
 
 ## Safety and privacy
 
@@ -113,6 +115,6 @@ Every push to `main` builds the app in GitHub Actions and publishes it as a rele
 
 ### Tech
 
-Kotlin Multiplatform · Jetpack Compose · Ktor · smbj · Material 3
+Kotlin Multiplatform · Jetpack Compose · Ktor · smbj · LiteRT-LM (Gemma) · Material 3
 
 </details>
