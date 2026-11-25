@@ -29,6 +29,15 @@ android {
             }
         }
     }
+    // People get the release build: it can't be attached to with a debugger to read app data.
+    // It is signed with the same fixed key, so it updates over earlier builds.
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+        }
+    }
+    lint { checkReleaseBuilds = false; abortOnError = false }
     buildFeatures { compose = true }
     packaging {
         resources {

@@ -85,8 +85,26 @@ class Updater(private val context: Context) {
         out
     }
 
+    /**
+     * True when the downloaded file is this app, signed by the same key as the one installed.
+     * Android checks this too at install time; checking first means a bad file is never offered.
+     */
+    @Suppress("DEPRECATION")
+    private fun trusted(apk: File): Boolean = runCatching {
+        val pm = context.packageManager
+        val flag = android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+        val file = pm.getPackageArchiveInfo(apk.path, flag) ?: return false
+        if (file.packageName != context.packageName) return false
+        val theirs = file.signingInfo?.apkContentsSigners?.map { it.toByteArray().contentHashCode() }?.toSet()
+            ?: return true // this phone can't read it from a file: Android's own check still applies
+        val ours = pm.getPackageInfo(context.packageName, flag).signingInfo?.apkContentsSigners
+            ?.map { it.toByteArray().contentHashCode() }?.toSet().orEmpty()
+        theirs.isNotEmpty() && theirs == ours
+    }.getOrDefault(false)
+
     /** Hands the APK to Android's installer. Android asks the user before installing. */
     fun install(apk: File) {
+        if (!trusted(apk)) { apk.delete(); error("This update isn't signed by File Agent. Not installing.") }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", apk)
         context.startActivity(
             Intent(Intent.ACTION_VIEW)

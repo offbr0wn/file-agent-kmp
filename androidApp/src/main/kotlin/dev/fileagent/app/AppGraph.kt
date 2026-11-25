@@ -68,14 +68,14 @@ data class PlaceConfig(
     fun toJson(): JSONObject = JSONObject()
         .put("name", name).put("type", type).put("enabled", enabled)
         .put("localPath", localPath).put("host", host).put("share", share)
-        .put("folder", folder).put("user", user).put("password", password).put("server", server)
+        .put("folder", folder).put("user", user).put("password", Vault.seal(password)).put("server", server)
 
     companion object {
         fun fromJson(o: JSONObject) = PlaceConfig(
             name = o.optString("name"), type = o.optString("type", "local"),
             enabled = o.optBoolean("enabled", true), localPath = o.optString("localPath"),
             host = o.optString("host"), share = o.optString("share"), folder = o.optString("folder"),
-            user = o.optString("user"), password = o.optString("password"),
+            user = o.optString("user"), password = Vault.open(o.optString("password")),
             server = o.optString("server"),
         )
     }
@@ -155,7 +155,7 @@ class AppGraph(context: Context) {
     /** Saved chats, in app-private storage. */
     private val chatStore = ChatStore(File(context.filesDir, "chats"))
 
-    init { tidyPlaceNames() }
+    init { tidyPlaceNames(); runCatching { sealSecrets() } }
 
     /** Old place name -> new name, for chats saved before a rename. */
     private fun placeRenames(): Map<String, String> = runCatching {
@@ -274,12 +274,27 @@ class AppGraph(context: Context) {
 
     // NOTE: for a real release, store keys with Android Keystore-backed storage
     // or proxy calls through your own backend instead of shipping a raw key.
-    fun keyFor(p: Provider): String =
+    fun keyFor(p: Provider): String = Vault.open(
         prefs.getString("api_key_${p.name}", null)
             ?: (if (p == Provider.Claude) prefs.getString("api_key", "") else "").orEmpty()
+    )
 
     fun setKey(p: Provider, key: String) =
-        prefs.edit().putString("api_key_${p.name}", key.trim()).apply()
+        prefs.edit().putString("api_key_${p.name}", Vault.seal(key.trim())).apply()
+
+    /** One-time: lock AI keys and NAS passwords that older builds saved as plain text. */
+    private fun sealSecrets() {
+        Provider.entries.forEach { p ->
+            val plain = keyFor(p)
+            val raw = prefs.getString("api_key_${p.name}", null)
+            if (plain.isNotEmpty() && (raw == null || !Vault.isSealed(raw))) setKey(p, plain)
+        }
+        if (prefs.contains("api_key")) prefs.edit().remove("api_key").apply()
+        val places = prefs.getString("places", null)
+        if (places != null && loadPlaces().any { it.password.isNotEmpty() } && !places.contains("\"password\":\"v1:")) {
+            savePlaces(loadPlaces())
+        }
+    }
 
     /** Reading size: 1.0 normal, 1.15 large, 1.3 larger. */
     /** "short" or "detailed": how the AI talks. */

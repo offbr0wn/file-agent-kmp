@@ -43,19 +43,19 @@ jobs:
       - name: Run tests
         run: ./gradlew :shared:testDebugUnitTest --stacktrace
 
-      - name: Build debug APK
-        run: ./gradlew :androidApp:assembleDebug --stacktrace
+      - name: Build APK
+        run: ./gradlew :androidApp:assembleRelease --stacktrace
 
       - uses: actions/upload-artifact@v5
         with:
           name: FileAgent-apk
-          path: androidApp/build/outputs/apk/debug/*.apk
+          path: androidApp/build/outputs/apk/release/*.apk
 
       # Also keep the latest APK on an 'apk' branch for easy download.
       - name: Publish APK to apk branch
         run: |
           mkdir -p /tmp/out
-          cp androidApp/build/outputs/apk/debug/*.apk /tmp/out/FileAgent.apk
+          cp androidApp/build/outputs/apk/release/*.apk /tmp/out/FileAgent.apk
           cd /tmp/out
           git init -q -b apk
           git config user.name "github-actions[bot]"
