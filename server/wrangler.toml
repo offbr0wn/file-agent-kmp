@@ -16,7 +16,8 @@ PLAN_LINK = ""
 PACK_LINK = ""
 PLAN_MESSAGES = "1000"
 PACK_MESSAGES = "500"
-MODEL = "deepseek-flash"
+# Cheap, sees pictures, can use tools. Change it here to switch the paid AI for everyone.
+MODEL = "deepseek/deepseek-v4.1-flash"
 # Guard rails: per message, per minute, and a monthly AI-fee ceiling per person (USD).
 MAX_STEPS = "15"
 PER_MINUTE = "10"

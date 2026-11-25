@@ -1,9 +1,12 @@
 // File Agent AI relay: sign-up, credits, the AI call and Stripe payments.
-// Secrets (set with `wrangler secret put`): DEEPSEEK_API_KEY, STRIPE_WEBHOOK_SECRET.
+// Secrets (set with `wrangler secret put`): OPENROUTER_API_KEY, STRIPE_WEBHOOK_SECRET.
 
-const DEEPSEEK = "https://api.deepseek.com/anthropic/v1/messages";
-// DeepSeek peak prices per token (USD). Used for the safety-net cost counter.
-const PRICE_IN = 0.30 / 1e6, PRICE_CACHED = 0.006 / 1e6, PRICE_OUT = 1.20 / 1e6;
+// OpenRouter speaks the same Anthropic Messages format the app uses.
+const OPENROUTER = "https://openrouter.ai/api/v1/messages";
+// DeepSeek V4.1 Flash prices per token (USD), plus OpenRouter's 5.5% credit fee.
+// Used for the safety-net cost counter.
+const FEE = 1.055;
+const PRICE_IN = (0.30 / 1e6) * FEE, PRICE_CACHED = (0.006 / 1e6) * FEE, PRICE_OUT = (1.20 / 1e6) * FEE;
 const MAX_BODY = 6 * 1024 * 1024;
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -24,7 +27,7 @@ function randomHex(bytes) {
 
 async function accountFor(req, env) {
   const auth = req.headers.get("authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const token = (auth.startsWith("Bearer ") ? auth.slice(7) : req.headers.get("x-api-key") || "").trim();
   if (token.length < 40) return null;
   return env.DB.prepare("SELECT * FROM accounts WHERE token_hash = ?").bind(await sha256(token)).first();
 }
@@ -122,7 +125,8 @@ async function messages(req, acc, env, ctx) {
   const ok = await useStep(acc, requestId, env);
   if (ok !== "ok") return fail(WHY[ok][0], ok, WHY[ok][1]);
 
-  // The server picks the model and limits, whatever the app sends.
+  // The server picks the model and limits, whatever the app sends. Each person also gets their
+  // own tag in OpenRouter (a hash, not the account id), which helps it spot abuse.
   const upstreamBody = {
     model: env.MODEL,
     max_tokens: Math.min(Number(body.max_tokens) || 4096, 4096),
@@ -130,13 +134,17 @@ async function messages(req, acc, env, ctx) {
     messages: body.messages,
     tools: body.tools,
     thinking: { type: "disabled" },
+    user: (await sha256("user:" + acc.id)).slice(0, 32),
   };
-  const res = await fetch(env.UPSTREAM || DEEPSEEK, {
+  const res = await fetch(env.UPSTREAM || OPENROUTER, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-api-key": env.DEEPSEEK_API_KEY,
+      authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
       "anthropic-version": "2023-06-01",
+      // Shown in your OpenRouter dashboard, so you can see File Agent's usage.
+      "http-referer": "https://github.com/offbr0wn/file-agent-kmp",
+      "x-title": "File Agent",
     },
     body: JSON.stringify(upstreamBody),
   });

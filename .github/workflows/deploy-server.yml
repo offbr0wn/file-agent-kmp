@@ -1,6 +1,6 @@
 # Deploys the File Agent AI server to Cloudflare Workers (with its D1 database).
 # Needs these repository secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
-# DEEPSEEK_API_KEY, and (after Stripe is set up) STRIPE_WEBHOOK_SECRET.
+# OPENROUTER_API_KEY, and (after Stripe is set up) STRIPE_WEBHOOK_SECRET.
 name: Deploy server
 on:
   push:
@@ -62,10 +62,10 @@ jobs:
       - name: Secrets
         if: steps.check.outputs.ready == 'true'
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
         run: |
-          if [ -n "$DEEPSEEK_API_KEY" ]; then printf '%s' "$DEEPSEEK_API_KEY" | npx wrangler secret put DEEPSEEK_API_KEY; fi
+          if [ -n "$OPENROUTER_API_KEY" ]; then printf '%s' "$OPENROUTER_API_KEY" | npx wrangler secret put OPENROUTER_API_KEY; fi
           if [ -n "$STRIPE_WEBHOOK_SECRET" ]; then printf '%s' "$STRIPE_WEBHOOK_SECRET" | npx wrangler secret put STRIPE_WEBHOOK_SECRET; fi
 
       - name: Check it answers
