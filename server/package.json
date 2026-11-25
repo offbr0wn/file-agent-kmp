@@ -1,0 +1,1 @@
+{ "name": "file-agent-server", "private": true, "devDependencies": { "wrangler": "^4" } }

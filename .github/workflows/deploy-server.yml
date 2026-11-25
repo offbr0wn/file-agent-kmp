@@ -1,0 +1,75 @@
+# Deploys the File Agent AI server to Cloudflare Workers (with its D1 database).
+# Needs these repository secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
+# DEEPSEEK_API_KEY, and (after Stripe is set up) STRIPE_WEBHOOK_SECRET.
+name: Deploy server
+on:
+  push:
+    branches: [main]
+    paths: ['server/**', '.github/workflows/deploy-server.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-server
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Cloudflare secrets
+        id: check
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "Cloudflare secrets not set yet. Skipping deploy."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.ready == 'true'
+        with:
+          node-version: 22
+
+      - name: Install
+        if: steps.check.outputs.ready == 'true'
+        run: npm install --no-audit --no-fund
+
+      # Makes the database the first time, then reuses it.
+      - name: Database
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          ID=$(npx wrangler d1 list --json | node -e 'const l=JSON.parse(require("fs").readFileSync(0,"utf8"));const d=l.find(x=>x.name==="file-agent");process.stdout.write(d?d.uuid:"")')
+          if [ -z "$ID" ]; then
+            npx wrangler d1 create file-agent --location weur
+            ID=$(npx wrangler d1 list --json | node -e 'const l=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(l.find(x=>x.name==="file-agent").uuid)')
+          fi
+          sed -i "s/REPLACED_BY_CI/$ID/" wrangler.toml
+          npx wrangler d1 migrations apply file-agent --remote
+
+      - name: Deploy
+        if: steps.check.outputs.ready == 'true'
+        run: npx wrangler deploy
+
+      - name: Secrets
+        if: steps.check.outputs.ready == 'true'
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+        run: |
+          if [ -n "$DEEPSEEK_API_KEY" ]; then printf '%s' "$DEEPSEEK_API_KEY" | npx wrangler secret put DEEPSEEK_API_KEY; fi
+          if [ -n "$STRIPE_WEBHOOK_SECRET" ]; then printf '%s' "$STRIPE_WEBHOOK_SECRET" | npx wrangler secret put STRIPE_WEBHOOK_SECRET; fi
+
+      - name: Check it answers
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          URL=$(npx wrangler deployments status 2>/dev/null | grep -o 'https://[^ ]*workers.dev' | head -1 || true)
+          echo "Server: ${URL:-see the Deploy step above}"

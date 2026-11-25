@@ -1,0 +1,23 @@
+name = "file-agent"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "file-agent"
+database_id = "REPLACED_BY_CI"
+migrations_dir = "migrations"
+
+[vars]
+# Public Stripe payment links. The app adds ?client_reference_id=<account> so a payment
+# lands on the right account.
+PLAN_LINK = ""
+PACK_LINK = ""
+PLAN_MESSAGES = "1000"
+PACK_MESSAGES = "500"
+MODEL = "deepseek-flash"
+# Guard rails: per message, per minute, and a monthly AI-fee ceiling per person (USD).
+MAX_STEPS = "15"
+PER_MINUTE = "10"
+COST_CAP_USD = "5"
