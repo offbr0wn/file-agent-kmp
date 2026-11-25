@@ -1,0 +1,25 @@
+# One-off: removes releases and tags older than build 103.
+# They pointed at old history that held the app's signing key.
+name: Clean old releases
+on:
+  push:
+    paths: ['.github/workflows/cleanup-old-releases.yml']
+permissions:
+  contents: write
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete releases and tags before build 103
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for tag in $(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/build-" --paginate -q '.[].ref' | sed 's#refs/tags/##'); do
+            n=${tag#build-}
+            case "$n" in ''|*[!0-9]*) continue;; esac
+            if [ "$n" -lt 103 ]; then
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null \
+                || gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" || true
+            fi
+          done
+          echo "Tags left:"; gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/" --paginate -q '.[].ref'
