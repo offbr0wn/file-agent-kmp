@@ -48,6 +48,8 @@ class AgentRunner(
     private val onPlacesChosen: (List<String>) -> Unit,
     /** Maps place names saved in old chats to their current names. */
     private val fixPlaces: (List<String>) -> List<String> = { it },
+    /** Called once per message the user sends, before the AI runs. */
+    private val onNewMessage: () -> Unit = {},
 ) {
     private val _state = MutableStateFlow(RunState(chats = store.list(), places = defaultPlaces()))
     val state: StateFlow<RunState> = _state
@@ -95,6 +97,7 @@ class AgentRunner(
     /** Sends a message (and any pictures) in the open chat. The AI keeps the whole conversation as context. */
     fun send(text: String, images: List<String> = emptyList()): Boolean {
         if (_state.value.busy || (text.isBlank() && images.isEmpty())) return false
+        onNewMessage()
         val places = _state.value.places
         val agent = newAgent(places) // fresh each time so the chat's folders are current
         // Tell the AI when the folders changed mid-chat. The bubble shows only what the user typed.

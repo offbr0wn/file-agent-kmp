@@ -32,6 +32,8 @@ enum class Provider(
     val modelsUrl: String,
     val defaults: List<ModelInfo>,
 ) {
+    /** Our paid AI: no setup, runs on our server, paid for with the plan or top-ups. */
+    Hosted("File Agent AI", "", HostedAccount.SERVER, "", listOf(ModelInfo("deepseek-flash", "File Agent AI", true))),
     Claude("Claude", "console.anthropic.com", "https://api.anthropic.com", "https://api.anthropic.com/v1/models?limit=100",
         listOf(
             ModelInfo("claude-sonnet-5-5", "Claude Sonnet 5.5", true),
@@ -100,6 +102,12 @@ class AppGraph(context: Context) {
         }
     }
 
+    /** The paid File Agent AI account. */
+    val hosted = HostedAccount(http, prefs)
+
+    /** Changes with every message the user sends; the server counts one message per id. */
+    @Volatile var requestId: String = java.util.UUID.randomUUID().toString()
+
     /** The on-phone AI: its model file, and the engine that runs it. */
     val localModel = LocalModel(context, prefs)
     val localLlm = LocalLlm(context, localModel, prefs)
@@ -113,6 +121,14 @@ class AppGraph(context: Context) {
         ): AssistantTurn {
             val p = provider
             if (p == Provider.Local) return localLlm.complete(system, messages, tools)
+            if (p == Provider.Hosted) {
+                val token = hosted.ensure()
+                val id = requestId
+                return AnthropicClient(
+                    http, apiKey = { token }, model = p.model, baseUrl = p.baseUrl,
+                    extraHeaders = { mapOf("x-request-id" to id) },
+                ).complete(system, messages, tools)
+            }
             return AnthropicClient(
                 http, apiKey = { keyFor(p) }, model = modelFor(p), baseUrl = p.baseUrl,
                 disableThinking = p == Provider.DeepSeek,
@@ -184,6 +200,7 @@ class AppGraph(context: Context) {
         defaultPlaces = { defaultChatPlaces() },
         fixPlaces = { names -> placeRenames().let { r -> names.map { r[it] ?: it }.distinct() } },
         onPlacesChosen = { lastChatPlaces = it },
+        onNewMessage = { requestId = java.util.UUID.randomUUID().toString() },
     )
 
     /** Folders a new chat starts with: the last chat's choice, else the first saved place. */
@@ -281,24 +298,25 @@ class AppGraph(context: Context) {
 
     var provider: Provider
         get() = runCatching { Provider.valueOf(prefs.getString("provider", null) ?: "") }
-            .getOrDefault(Provider.Claude)
+            // New installs start on File Agent AI; anyone who already saved a Claude key keeps Claude.
+            .getOrDefault(if (prefs.contains("api_key_Claude") || prefs.contains("api_key")) Provider.Claude else Provider.Hosted)
         set(v) = prefs.edit().putString("provider", v.name).apply()
 
     // NOTE: for a real release, store keys with Android Keystore-backed storage
     // or proxy calls through your own backend instead of shipping a raw key.
-    fun keyFor(p: Provider): String = if (p == Provider.Local) (if (localModel.isReady) "on-phone" else "") else Vault.open(
+    fun keyFor(p: Provider): String = if (p == Provider.Hosted) "hosted" else if (p == Provider.Local) (if (localModel.isReady) "on-phone" else "") else Vault.open(
         prefs.getString("api_key_${p.name}", null)
             ?: (if (p == Provider.Claude) prefs.getString("api_key", "") else "").orEmpty()
     )
 
     fun setKey(p: Provider, key: String) {
-        if (p == Provider.Local) return // it has no key
+        if (p == Provider.Local || p == Provider.Hosted) return // no key to save
         prefs.edit().putString("api_key_${p.name}", Vault.seal(key.trim())).apply()
     }
 
     /** One-time: lock AI keys and NAS passwords that older builds saved as plain text. */
     private fun sealSecrets() {
-        Provider.entries.filter { it != Provider.Local }.forEach { p ->
+        Provider.entries.filter { it != Provider.Local && it != Provider.Hosted }.forEach { p ->
             val plain = keyFor(p)
             val raw = prefs.getString("api_key_${p.name}", null)
             if (plain.isNotEmpty() && (raw == null || !Vault.isSealed(raw))) setKey(p, plain)

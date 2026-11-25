@@ -33,6 +33,8 @@ class AnthropicClient(
     private val baseUrl: String = "https://api.anthropic.com",
     /** DeepSeek may think by default, which can use up the token budget before any tool call. */
     private val disableThinking: Boolean = false,
+    /** Extra headers per call, e.g. the message id the File Agent server uses to count messages. */
+    private val extraHeaders: () -> Map<String, String> = { emptyMap() },
 ) : LlmClient {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -62,6 +64,7 @@ class AnthropicClient(
         val response = http.post("$baseUrl/v1/messages") {
             header("x-api-key", apiKey())
             header("anthropic-version", "2023-06-01")
+            extraHeaders().forEach { (k, v) -> header(k, v) }
             contentType(ContentType.Application.Json)
             setBody(body.toString())
         }

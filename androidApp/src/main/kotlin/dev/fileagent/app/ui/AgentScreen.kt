@@ -60,7 +60,9 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -469,7 +471,7 @@ private fun Thread(vm: AgentViewModel, s: UiState, speak: ((String) -> Unit)?) {
                 "user" -> item { UserBubble(item.text, item.images) }
                 "assistant" -> item { AssistantText(item.text, speak) }
                 "activity" -> item { Steps(item) }
-                "error" -> item { ErrorRow(item.text, onNewChat = vm::newChat) }
+                "error" -> item { ErrorRow(item.text, onNewChat = vm::newChat, onGetMessages = { vm.showSettings(true) }) }
                 "files" -> item { FilesGrid(vm, item.text, item.images, item.picked.toSet(), enabled = !s.busy) { vm.setPicked(index, it.toList()) } }
                 "note" -> item {
                     val canEmpty = "in bin" in item.text && index == lastBinNote && !binEmptiedAfter
@@ -699,7 +701,7 @@ private fun FileCell(vm: AgentViewModel, path: String, on: Boolean, modifier: Mo
 }
 
 @Composable
-private fun ErrorRow(text: String, onNewChat: () -> Unit) {
+private fun ErrorRow(text: String, onNewChat: () -> Unit, onGetMessages: () -> Unit = {}) {
     val c = LocalSui.current
     var open by remember { mutableStateOf(false) }
     Column(
@@ -717,7 +719,9 @@ private fun ErrorRow(text: String, onNewChat: () -> Unit) {
         if (open) androidx.compose.foundation.text.selection.SelectionContainer {
             Text(text, style = SuiType.bodySm, color = c.errorDark)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(SuiSpace.inner)) {
+        if ("no AI messages left" in text) {
+            PillButton("Get messages", onGetMessages, small = true, primary = true, icon = Icons.Outlined.AutoAwesome)
+        } else Row(horizontalArrangement = Arrangement.spacedBy(SuiSpace.inner)) {
             Text("Send again to retry, or", style = SuiType.bodySm, color = c.errorDark, modifier = Modifier.align(Alignment.CenterVertically))
             PillButton("New chat", onNewChat, small = true, icon = Icons.Outlined.Edit)
         }
@@ -1243,11 +1247,13 @@ private fun SettingsScreen(vm: AgentViewModel, s: UiState) {
             Column {
                 SectionLabel("AI (optional)")
                 ListCard {
-                    SettingRow("Provider", s.provider.label) { showKey = true }
+                    SettingRow("AI", s.provider.label) { showKey = true }
                     ListDivider(inset = SuiSpace.pad)
-                    SettingRow("Model", s.modelName) { showKey = true }
+                    if (s.provider != Provider.Hosted) SettingRow("Model", s.modelName) { showKey = true }
                     ListDivider(inset = SuiSpace.pad)
-                    if (s.provider == Provider.Local) {
+                    if (s.provider == Provider.Hosted) {
+                        SettingRow("Messages left", if (s.hosted.signedUp) "${s.hosted.left}" else "") { showKey = true }
+                    } else if (s.provider == Provider.Local) {
                         SettingRow("Model file", when (s.localModel.status) { "ready" -> "Ready"; "downloading" -> "${s.localModel.percent}%"; else -> "Not downloaded" }) { showKey = true }
                     } else SettingRow("API key", if (s.hasApiKey) "Saved" else "Not set") { showKey = true }
                 }
@@ -1384,10 +1390,30 @@ private fun KeySheet(vm: AgentViewModel, s: UiState, onClose: () -> Unit) {
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("AI", style = SuiType.title, color = c.text)
-                Text("Use a cloud AI with your key, or a free one on your phone.", style = SuiType.bodySm, color = c.textSoft)
+                Text("Pick how File Agent thinks.", style = SuiType.bodySm, color = c.textSoft)
             }
-            Segmented(Provider.entries, provider, { it.label }) { provider = it; key = "" }
-            if (provider == Provider.Local) {
+            // Three ways to get AI: ours (paid), your own key, or on the phone.
+            Column {
+                AiChoice(Icons.Outlined.AutoAwesome, "File Agent AI", "No setup. Monthly plan or top-ups.", provider == Provider.Hosted) {
+                    provider = Provider.Hosted; vm.refreshHosted(create = true)
+                }
+                ListDivider(inset = 40.dp + SuiSpace.inner)
+                AiChoice(Icons.Outlined.Key, "Your own key", "Claude or DeepSeek. You pay them.", provider == Provider.Claude || provider == Provider.DeepSeek) {
+                    if (provider != Provider.Claude && provider != Provider.DeepSeek) { provider = Provider.DeepSeek; key = "" }
+                }
+                ListDivider(inset = 40.dp + SuiSpace.inner)
+                AiChoice(Icons.Outlined.PhoneAndroid, "On phone", "Free and private. Big download.", provider == Provider.Local) {
+                    provider = Provider.Local
+                }
+            }
+            if (provider == Provider.Hosted) {
+                HostedPanel(vm, s)
+                PillButton(
+                    "Use File Agent AI",
+                    { vm.setModel(provider, model); vm.saveKey(provider, ""); onClose() },
+                    Modifier.fillMaxWidth(), primary = true, enabled = s.hosted.signedUp,
+                )
+            } else if (provider == Provider.Local) {
                 LocalAiPanel(vm, s)
                 PillButton(
                     "Use on-phone AI",
@@ -1395,6 +1421,7 @@ private fun KeySheet(vm: AgentViewModel, s: UiState, onClose: () -> Unit) {
                     Modifier.fillMaxWidth(), primary = true, enabled = s.localModel.status == "ready",
                 )
             } else {
+            Segmented(listOf(Provider.Claude, Provider.DeepSeek), provider, { it.label }) { provider = it; key = "" }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Field(key, { key = it }, if (hasKey) "Key saved. Paste to replace." else "${provider.label} API key", secret = true)
                 Text("Get a key at ${provider.keySite}", style = SuiType.bodySm, color = c.textSoft)
@@ -1682,6 +1709,82 @@ private fun LocalAiPanel(vm: AgentViewModel, s: UiState) {
                 PillButton(if (m.status == "failed") "Try again" else "Download · 2.6 GB", { problem = vm.downloadLocalModel() },
                     Modifier.fillMaxWidth(), icon = Icons.Outlined.Download)
                 Text("One time only. Use Wi-Fi.", style = SuiType.bodySm, color = c.textSoft)
+            }
+        }
+    }
+}
+
+/** One way to get AI, as a tickable row. */
+@Composable
+private fun AiChoice(icon: ImageVector, title: String, meta: String, on: Boolean, onClick: () -> Unit) {
+    val c = LocalSui.current
+    PlainRow(title, meta, leading = { IconTile(icon, if (on) c.brand else null, if (on) c.brandLighter else null) },
+        onClick = onClick, trailing = { RoundTick(on) })
+}
+
+/** File Agent AI: messages left, the plan and top-up, and the account backup. */
+@Composable
+private fun HostedPanel(vm: AgentViewModel, s: UiState) {
+    val c = LocalSui.current
+    val h = s.hosted
+    val ctx = LocalContext.current
+    var restore by remember { mutableStateOf(false) }
+    var restoreKey by remember { mutableStateOf("") }
+    var problem by remember { mutableStateOf<String?>(null) }
+    // Coming back from the payment page: load the new balance.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) vm.refreshHosted() }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
+    LaunchedEffect(Unit) { vm.refreshHosted(create = true) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(SuiSpace.inner)) {
+        when {
+            h.loading && !h.signedUp -> Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(16.dp), color = c.brand, strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("Setting up", style = SuiType.label, color = c.textSub)
+            }
+            h.error != null && !h.signedUp -> Text(h.error, style = SuiType.bodySm, color = c.errorDark)
+            else -> Column(
+                Modifier.fillMaxWidth().clip(SuiShape.card).background(c.tile).padding(SuiSpace.pad),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("${h.left}", style = SuiType.display, color = c.text)
+                Text("messages left", style = SuiType.bodySm, color = c.textSoft)
+                if (h.plan == "plus") {
+                    val until = java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(h.planUntil * 1000))
+                    Text("Plus · renews $until", style = SuiType.labelSm, color = c.successDark)
+                }
+                h.error?.let { Text(it, style = SuiType.bodySm, color = c.errorDark) }
+            }
+        }
+        if (h.signedUp) {
+            if (h.plan != "plus") PillButton("Get Plus · £4.99 a month", { vm.openPayment(h.planLink) }, Modifier.fillMaxWidth(),
+                primary = true, icon = Icons.Outlined.AutoAwesome, enabled = h.planLink.isNotBlank())
+            if (h.plan != "plus") Text("${h.planMessages} messages every month. Cancel any time.", style = SuiType.bodySm, color = c.textSoft)
+            PillButton("Top up · £2.99 for ${h.packMessages}", { vm.openPayment(h.packLink) }, Modifier.fillMaxWidth(),
+                enabled = h.packLink.isNotBlank())
+            Text("Top-ups never expire. One message can take a few AI steps; it counts as one.", style = SuiType.bodySm, color = c.textSoft)
+            if (h.planLink.isBlank()) Text("Payments open soon.", style = SuiType.bodySm, color = c.textSoft)
+
+            // Backup, so a reinstall or a new phone keeps what was paid for.
+            Row(horizontalArrangement = Arrangement.spacedBy(SuiSpace.inner)) {
+                PillButton("Copy account key", {
+                    val cm = ctx.getSystemService(android.content.ClipboardManager::class.java)
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("File Agent account key", vm.hostedKey()))
+                    android.widget.Toast.makeText(ctx, "Copied. Keep it somewhere safe.", android.widget.Toast.LENGTH_SHORT).show()
+                }, small = true)
+                PillButton("Restore", { restore = !restore }, small = true)
+            }
+            Text("Save your account key. You need it to keep your plan after a reinstall.", style = SuiType.bodySm, color = c.textSoft)
+            if (restore) {
+                Field(restoreKey, { restoreKey = it; problem = null }, "Paste account key", secret = true)
+                problem?.let { Text(it, style = SuiType.bodySm, color = c.errorDark) }
+                PillButton("Restore account", { problem = vm.restoreHosted(restoreKey); if (problem == null) restore = false },
+                    Modifier.fillMaxWidth(), enabled = restoreKey.isNotBlank())
             }
         }
     }

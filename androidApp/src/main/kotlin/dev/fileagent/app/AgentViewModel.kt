@@ -91,6 +91,8 @@ data class UiState(
     val nasScanning: Boolean = false,
     /** Shares a NAS offers, after signing in. Null until signed in. */
     val nasShares: List<String>? = null,
+    /** The paid File Agent AI account: messages left and where to pay. */
+    val hosted: HostedState = HostedState(),
     /** The on-phone AI model: not there, downloading, or ready. */
     val localModel: LocalModelState = LocalModelState(),
     /** Phone memory in GB, to warn when the on-phone AI may not fit. */
@@ -173,6 +175,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
             .getOrNull()?.let { text -> _state.update { it.copy(crash = text) } }
         _state.update { it.copy(appVersion = updater.installedName, ramGb = graph.localModel.ramGb) }
         watchLocalModel()
+        refreshHosted()
         checkUpdate(quiet = true)
         // Pin the answer, so leaving the first-run guide half way shows it again next time.
         if (!graph.onboarded) graph.onboarded = false
@@ -258,6 +261,46 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
             runner.showQuickPlan("Quick sort $place", plan.copy(summary = "Sorted by type, no AI"))
         }
         return true
+    }
+
+    // ---- File Agent AI (paid) ---------------------------------------------------------
+
+    /** Makes the private account if needed, then loads messages left. */
+    fun refreshHosted(create: Boolean = false) {
+        if (_state.value.hosted.loading) return
+        if (!create && graph.hosted.token.isBlank()) return
+        _state.update { it.copy(hosted = it.hosted.copy(loading = true, error = null)) }
+        viewModelScope.launch {
+            val r = runCatching {
+                if (create) graph.hosted.ensure()
+                graph.hosted.refresh()
+            }
+            _state.update {
+                it.copy(hosted = r.getOrElse { e -> it.hosted.copy(loading = false, error = e.message ?: "Can't reach File Agent AI") })
+            }
+        }
+    }
+
+    /** Opens the Stripe checkout page in the browser. */
+    fun openPayment(link: String) {
+        if (link.isBlank()) return
+        val app = getApplication<Application>()
+        runCatching {
+            app.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(link))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+
+    /** The account key, for the user to keep as a backup. */
+    fun hostedKey(): String = graph.hosted.token
+
+    /** Signs in with a backed-up account key (after a reinstall or on a new phone). */
+    fun restoreHosted(key: String): String? {
+        val k = key.trim()
+        if (!k.startsWith("fa_") || k.length < 40) return "That doesn't look like an account key"
+        graph.hosted.setToken(k)
+        refreshHosted()
+        return null
     }
 
     // ---- on-phone AI ----------------------------------------------------------------

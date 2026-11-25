@@ -65,7 +65,7 @@ class ModelCatalog(private val http: HttpClient, private val prefs: SharedPrefer
 
     /** Fetches the live list. Returns null (and keeps the old list) if it fails. */
     suspend fun refresh(p: Provider, key: String): List<ModelInfo>? = withContext(Dispatchers.IO) {
-        if (key.isBlank() || p == Provider.Local) return@withContext null
+        if (key.isBlank() || p == Provider.Local || p == Provider.Hosted) return@withContext null
         runCatching {
             val res = http.get(p.modelsUrl) {
                 when (p) {
@@ -74,7 +74,7 @@ class ModelCatalog(private val http: HttpClient, private val prefs: SharedPrefer
                         header("anthropic-version", "2023-06-01")
                     }
                     Provider.DeepSeek -> header("Authorization", "Bearer $key")
-                    Provider.Local -> {}
+                    Provider.Local, Provider.Hosted -> {}
                 }
             }
             if (!res.status.isSuccess()) return@runCatching null
@@ -89,7 +89,7 @@ class ModelCatalog(private val http: HttpClient, private val prefs: SharedPrefer
     private fun parse(p: Provider, o: JSONObject): ModelInfo? {
         val id = o.optString("id").ifBlank { return null }
         return when (p) {
-            Provider.Local -> null
+            Provider.Local, Provider.Hosted -> null
             Provider.Claude -> {
                 if (!id.startsWith("claude")) return null
                 val life = o.optString("lifecycle")
