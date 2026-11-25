@@ -3,6 +3,8 @@ name: Build APK
 on:
   push:
     branches: [main]
+    # Text and picture changes don't need a new app build.
+    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
 
 # A newer push cancels an older build still running, so changes uploaded
