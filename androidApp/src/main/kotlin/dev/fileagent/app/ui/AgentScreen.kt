@@ -61,6 +61,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Folder
@@ -434,7 +435,7 @@ private fun Home(vm: AgentViewModel, s: UiState, onSend: (String) -> Unit, onQui
         }
 
         if (!s.hasApiKey) {
-            PillButton("Add AI key to chat", { vm.showSettings(true) }, icon = Icons.Outlined.ChatBubbleOutline)
+            PillButton("Set up AI to chat", { vm.showSettings(true) }, icon = Icons.Outlined.ChatBubbleOutline)
         }
     }
 
@@ -1246,7 +1247,9 @@ private fun SettingsScreen(vm: AgentViewModel, s: UiState) {
                     ListDivider(inset = SuiSpace.pad)
                     SettingRow("Model", s.modelName) { showKey = true }
                     ListDivider(inset = SuiSpace.pad)
-                    SettingRow("API key", if (s.hasApiKey) "Saved" else "Not set") { showKey = true }
+                    if (s.provider == Provider.Local) {
+                        SettingRow("Model file", when (s.localModel.status) { "ready" -> "Ready"; "downloading" -> "${s.localModel.percent}%"; else -> "Not downloaded" }) { showKey = true }
+                    } else SettingRow("API key", if (s.hasApiKey) "Saved" else "Not set") { showKey = true }
                 }
                 Text("Needed for chat. Quick sort works without it.", style = SuiType.bodySm, color = c.textSoft, modifier = Modifier.padding(start = 4.dp, top = 8.dp))
             }
@@ -1381,9 +1384,17 @@ private fun KeySheet(vm: AgentViewModel, s: UiState, onClose: () -> Unit) {
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("AI", style = SuiType.title, color = c.text)
-                Text("Your key stays on this phone.", style = SuiType.bodySm, color = c.textSoft)
+                Text("Use a cloud AI with your key, or a free one on your phone.", style = SuiType.bodySm, color = c.textSoft)
             }
             Segmented(Provider.entries, provider, { it.label }) { provider = it; key = "" }
+            if (provider == Provider.Local) {
+                LocalAiPanel(vm, s)
+                PillButton(
+                    "Use on-phone AI",
+                    { vm.setModel(provider, model); vm.saveKey(provider, ""); onClose() },
+                    Modifier.fillMaxWidth(), primary = true, enabled = s.localModel.status == "ready",
+                )
+            } else {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Field(key, { key = it }, if (hasKey) "Key saved. Paste to replace." else "${provider.label} API key", secret = true)
                 Text("Get a key at ${provider.keySite}", style = SuiType.bodySm, color = c.textSoft)
@@ -1422,6 +1433,7 @@ private fun KeySheet(vm: AgentViewModel, s: UiState, onClose: () -> Unit) {
                 { vm.setModel(provider, model); vm.saveKey(provider, key); onClose() },
                 Modifier.fillMaxWidth(), primary = true, enabled = key.isNotBlank() || hasKey,
             )
+            }
         }
     }
 }
@@ -1574,16 +1586,16 @@ private fun Welcome(vm: AgentViewModel, s: UiState, hasAccess: Boolean, onGrantA
                 }
                 else -> {
                     IconTile(Icons.Outlined.ChatBubbleOutline, c.brandDark, c.brandLighter, size = 72.dp)
-                    WelcomeTitle("Chat with AI (optional)", "Quick sort and Files work without it. To chat, add your own AI key.")
+                    WelcomeTitle("Chat with AI (optional)", "Quick sort and Files work without it. To chat, pick an AI.")
                     Column {
-                        GateLine(Icons.Outlined.Lock, "Your key stays on this phone")
-                        GateLine(Icons.Outlined.Check, "Works with Claude or DeepSeek")
+                        GateLine(Icons.Outlined.PhoneAndroid, "Free AI that runs on your phone")
+                        GateLine(Icons.Outlined.Check, "Or Claude or DeepSeek with your own key")
                     }
                     if (s.hasApiKey) Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Check, null, tint = c.successDark, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Key saved", style = SuiType.label, color = c.successDark)
-                    } else PillButton("Add AI key", { showKey = true }, icon = Icons.Outlined.Add)
+                        Text("AI is ready", style = SuiType.label, color = c.successDark)
+                    } else PillButton("Set up AI", { showKey = true }, icon = Icons.Outlined.Add)
                 }
             }
         }
@@ -1629,5 +1641,48 @@ private fun UpdateCard(vm: AgentViewModel, s: UiState) {
         s.updateStatus?.let { Text(it, style = SuiType.labelSm, color = c.textSub) }
         if (s.updateBusy) LinearProgressIndicator(Modifier.fillMaxWidth().height(4.dp).clip(SuiShape.pill), color = c.brand, trackColor = c.tile)
         PillButton("Update", vm::installUpdate, Modifier.fillMaxWidth(), primary = true, enabled = !s.updateBusy)
+    }
+}
+
+/** The on-phone AI: what it is, the one-time download, and its state. */
+@Composable
+private fun LocalAiPanel(vm: AgentViewModel, s: UiState) {
+    val c = LocalSui.current
+    val m = s.localModel
+    var problem by remember { mutableStateOf<String?>(null) }
+    Column(verticalArrangement = Arrangement.spacedBy(SuiSpace.inner)) {
+        Column {
+            GateLine(Icons.Outlined.Lock, "Private. Nothing leaves your phone.")
+            GateLine(Icons.Outlined.Check, "Free. No key. Works offline.")
+            GateLine(Icons.Outlined.Bolt, "Best for simple jobs. Slower than cloud AI.")
+        }
+        if (s.ramGb in 1..5) {
+            Text("This phone has ${s.ramGb} GB of memory. The AI may be slow or may not run.", style = SuiType.bodySm, color = c.errorDark,
+                modifier = Modifier.fillMaxWidth().clip(SuiShape.row).background(c.errorLighter).padding(SuiSpace.inner))
+        }
+        when (m.status) {
+            "ready" -> Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Check, null, tint = c.successDark, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Downloaded and ready", style = SuiType.label, color = c.successDark, modifier = Modifier.weight(1f))
+                Text("Delete", style = SuiType.labelSm, color = c.errorDark,
+                    modifier = Modifier.clip(SuiShape.pill).clickable { vm.removeLocalModel() }.padding(horizontal = 12.dp, vertical = 8.dp))
+            }
+            "downloading" -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(m.note ?: "Downloading ${m.percent}%", style = SuiType.label, color = c.text, modifier = Modifier.weight(1f))
+                    Text("Cancel", style = SuiType.labelSm, color = c.textSub,
+                        modifier = Modifier.clip(SuiShape.pill).clickable { vm.removeLocalModel() }.padding(horizontal = 12.dp, vertical = 8.dp))
+                }
+                LinearProgressIndicator(progress = m.percent / 100f, modifier = Modifier.fillMaxWidth().height(6.dp).clip(SuiShape.pill), color = c.brand, trackColor = c.tile)
+                Text("You can leave the app. It keeps going.", style = SuiType.bodySm, color = c.textSoft)
+            }
+            else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                (problem ?: m.note)?.let { Text(it, style = SuiType.bodySm, color = c.errorDark) }
+                PillButton(if (m.status == "failed") "Try again" else "Download · 2.6 GB", { problem = vm.downloadLocalModel() },
+                    Modifier.fillMaxWidth(), icon = Icons.Outlined.Download)
+                Text("One time only. Use Wi-Fi.", style = SuiType.bodySm, color = c.textSoft)
+            }
+        }
     }
 }

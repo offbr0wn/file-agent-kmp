@@ -10,6 +10,7 @@ lifecycle = "2.9.1"
 work = "2.10.2"
 smbj = "0.13.0"
 smbjRpc = "0.12.13"
+litertlm = "0.20.0"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -19,6 +20,7 @@ ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 smbj = { module = "com.hierynomus:smbj", version.ref = "smbj" }
 smbj-rpc = { module = "com.rapid7.client:dcerpc", version.ref = "smbjRpc" }
+litertlm = { module = "com.google.ai.edge.litertlm:litertlm-android", version.ref = "litertlm" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
 compose-icons-extended = { module = "androidx.compose.material:material-icons-extended" }

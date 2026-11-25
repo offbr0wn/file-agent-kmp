@@ -48,5 +48,8 @@
             android:name=".AgentService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- Lets the on-phone AI use the graphics chip where the phone has these. -->
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
     </application>
 </manifest>

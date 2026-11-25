@@ -61,6 +61,7 @@ kotlin { jvmToolchain(17) }
 
 dependencies {
     implementation(libs.smbj)
+    implementation(libs.litertlm) // on-phone AI
     implementation(libs.smbj.rpc)
     implementation(project(":shared"))
     implementation(platform(libs.compose.bom))

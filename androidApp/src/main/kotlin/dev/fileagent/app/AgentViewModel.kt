@@ -91,6 +91,10 @@ data class UiState(
     val nasScanning: Boolean = false,
     /** Shares a NAS offers, after signing in. Null until signed in. */
     val nasShares: List<String>? = null,
+    /** The on-phone AI model: not there, downloading, or ready. */
+    val localModel: LocalModelState = LocalModelState(),
+    /** Phone memory in GB, to warn when the on-phone AI may not fit. */
+    val ramGb: Int = 0,
     /** e.g. "1.0.142". */
     val appVersion: String = "",
     /** A newer build that can be installed. */
@@ -167,7 +171,8 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
     init {
         runCatching { java.io.File(app.filesDir, "last-crash.txt").takeIf { it.exists() }?.readText() }
             .getOrNull()?.let { text -> _state.update { it.copy(crash = text) } }
-        _state.update { it.copy(appVersion = updater.installedName) }
+        _state.update { it.copy(appVersion = updater.installedName, ramGb = graph.localModel.ramGb) }
+        watchLocalModel()
         checkUpdate(quiet = true)
         // Pin the answer, so leaving the first-run guide half way shows it again next time.
         if (!graph.onboarded) graph.onboarded = false
@@ -253,6 +258,44 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
             runner.showQuickPlan("Quick sort $place", plan.copy(summary = "Sorted by type, no AI"))
         }
         return true
+    }
+
+    // ---- on-phone AI ----------------------------------------------------------------
+
+    private var localJob: kotlinx.coroutines.Job? = null
+
+    /** Keeps the model's state fresh while it downloads, and turns the AI on when it lands. */
+    private fun watchLocalModel() {
+        localJob?.cancel()
+        localJob = viewModelScope.launch {
+            while (true) {
+                val st = withContext(Dispatchers.IO) { graph.localModel.state() }
+                _state.update {
+                    it.copy(localModel = st, hasApiKey = if (it.provider == Provider.Local) st.status == "ready" else it.hasApiKey)
+                }
+                if (st.status != "downloading") break
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+
+    /** Starts the one-time model download. Returns a short problem, or null when started. */
+    fun downloadLocalModel(): String? {
+        if (!graph.localModel.hasRoom) return "Not enough free space. It needs about 3 GB."
+        val r = runCatching { graph.localModel.start() }
+        if (r.isFailure) return "Couldn't start the download"
+        _state.update { it.copy(localModel = LocalModelState("downloading")) }
+        watchLocalModel()
+        return null
+    }
+
+    /** Stops a download, or deletes the model to free its space. */
+    fun removeLocalModel() {
+        viewModelScope.launch {
+            graph.localLlm.unload()
+            withContext(Dispatchers.IO) { graph.localModel.cancel() }
+            watchLocalModel()
+        }
     }
 
     // ---- in-app updates ------------------------------------------------------------

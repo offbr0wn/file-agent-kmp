@@ -42,7 +42,9 @@ enum class Provider(
         listOf(
             ModelInfo("deepseek-flash", "DeepSeek V4.1 Flash", true),
             ModelInfo("deepseek-v4-pro", "DeepSeek V4 Pro", false),
-        ));
+        )),
+    /** Runs on the phone itself: no key, no internet, nothing sent anywhere. */
+    Local("On phone", "", "", "", listOf(ModelInfo("gemma-4-e2b", "Gemma 4 (on this phone)", false)));
 
     val model: String get() = defaults.first().id
 }
@@ -98,6 +100,10 @@ class AppGraph(context: Context) {
         }
     }
 
+    /** The on-phone AI: its model file, and the engine that runs it. */
+    val localModel = LocalModel(context, prefs)
+    val localLlm = LocalLlm(context, localModel, prefs)
+
     /** Always calls the selected provider with the selected model. Built per call so a model change applies at once. */
     val llm: LlmClient = object : LlmClient {
         override suspend fun complete(
@@ -106,6 +112,7 @@ class AppGraph(context: Context) {
             tools: List<ToolSpec>,
         ): AssistantTurn {
             val p = provider
+            if (p == Provider.Local) return localLlm.complete(system, messages, tools)
             return AnthropicClient(
                 http, apiKey = { keyFor(p) }, model = modelFor(p), baseUrl = p.baseUrl,
                 disableThinking = p == Provider.DeepSeek,
@@ -166,7 +173,12 @@ class AppGraph(context: Context) {
     /** Background AI runs, shared by the screen and [AgentService]. Uses only the allowed places. */
     val runner = AgentRunner(
         newAgent = { names ->
-            FileAgent(llm, placesFs(names), memory = { loadMemory() }, onRemember = { addMemory(it) }, replyStyle = { replyStyle })
+            // The on-phone model is small: give it shorter folder listings and fewer steps.
+            val small = provider == Provider.Local
+            FileAgent(
+                llm, placesFs(names), maxSteps = if (small) 12 else 20, maxListing = if (small) 60 else 200,
+                memory = { loadMemory() }, onRemember = { addMemory(it) }, replyStyle = { replyStyle },
+            )
         },
         store = chatStore,
         defaultPlaces = { defaultChatPlaces() },
@@ -274,17 +286,19 @@ class AppGraph(context: Context) {
 
     // NOTE: for a real release, store keys with Android Keystore-backed storage
     // or proxy calls through your own backend instead of shipping a raw key.
-    fun keyFor(p: Provider): String = Vault.open(
+    fun keyFor(p: Provider): String = if (p == Provider.Local) (if (localModel.isReady) "on-phone" else "") else Vault.open(
         prefs.getString("api_key_${p.name}", null)
             ?: (if (p == Provider.Claude) prefs.getString("api_key", "") else "").orEmpty()
     )
 
-    fun setKey(p: Provider, key: String) =
+    fun setKey(p: Provider, key: String) {
+        if (p == Provider.Local) return // it has no key
         prefs.edit().putString("api_key_${p.name}", Vault.seal(key.trim())).apply()
+    }
 
     /** One-time: lock AI keys and NAS passwords that older builds saved as plain text. */
     private fun sealSecrets() {
-        Provider.entries.forEach { p ->
+        Provider.entries.filter { it != Provider.Local }.forEach { p ->
             val plain = keyFor(p)
             val raw = prefs.getString("api_key_${p.name}", null)
             if (plain.isNotEmpty() && (raw == null || !Vault.isSealed(raw))) setKey(p, plain)
