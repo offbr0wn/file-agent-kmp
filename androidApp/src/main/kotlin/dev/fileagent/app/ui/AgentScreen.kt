@@ -1622,7 +1622,7 @@ private fun UpdateCard(vm: AgentViewModel, s: UiState) {
             Icon(Icons.Outlined.ArrowUpward, null, tint = c.brandDark, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
             Text("Update ready", style = SuiType.label, color = c.brandDark, modifier = Modifier.weight(1f))
-            Text("Build ${info.build}", style = SuiType.bodySm, color = c.brandDark)
+            Text("Build ${info.build} · ${info.bytes / (1024 * 1024)} MB", style = SuiType.bodySm, color = c.brandDark)
         }
         val firstLine = info.notes.lineSequence().firstOrNull { it.isNotBlank() }
         if (firstLine != null) Text(firstLine, style = SuiType.bodySm, color = c.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
