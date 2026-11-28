@@ -1,5 +1,6 @@
 // File Agent AI relay: sign-up, credits, the AI call and Stripe payments.
-// Secrets (set with `wrangler secret put`): OPENROUTER_API_KEY, STRIPE_WEBHOOK_SECRET.
+// Secrets (set with `wrangler secret put`): OPENROUTER_API_KEY, STRIPE_WEBHOOK_SECRET,
+// GOOGLE_PLAY_SA (the Play service account's JSON key, for checking Play purchases).
 
 // OpenRouter speaks the same Anthropic Messages format the app uses.
 const OPENROUTER = "https://openrouter.ai/api/v1/messages";
@@ -210,6 +211,148 @@ async function stripeWebhook(req, env) {
   return json({ ok: true });
 }
 
+// ---- Google Play ----------------------------------------------------------------------------
+// The app sends each Play purchase here. We ask Google if it is real before adding messages.
+// Auth is a service account: we sign a short JWT with its key and swap it for an access token.
+const GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
+const PUBLISHER = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications";
+let googleToken = { value: "", until: 0 };
+
+const b64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const b64urlText = (t) => b64url(new TextEncoder().encode(t));
+
+async function googleAccess(env) {
+  if (googleToken.value && googleToken.until > now() + 60) return googleToken.value;
+  const sa = JSON.parse(env.GOOGLE_PLAY_SA);
+  const pem = sa.private_key.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+  const der = Uint8Array.from(atob(pem), (ch) => ch.charCodeAt(0));
+  const key = await crypto.subtle.importKey("pkcs8", der, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  const aud = env.GOOGLE_TOKEN_URL || GOOGLE_TOKEN;
+  const head = b64urlText(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claims = b64urlText(JSON.stringify({
+    iss: sa.client_email, scope: "https://www.googleapis.com/auth/androidpublisher", aud, iat: now(), exp: now() + 3600,
+  }));
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(`${head}.${claims}`));
+  const res = await fetch(aud, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${head}.${claims}.${b64url(sig)}` }),
+  });
+  if (!res.ok) throw new Error("google auth " + res.status);
+  const t = await res.json();
+  googleToken = { value: t.access_token, until: now() + (t.expires_in || 3600) };
+  return googleToken.value;
+}
+
+async function googleGet(env, path) {
+  const base = env.PLAY_API || PUBLISHER;
+  const res = await fetch(`${base}/${env.PACKAGE}/purchases/${path}`, {
+    headers: { authorization: `Bearer ${await googleAccess(env)}` },
+  });
+  if (res.status === 404 || res.status === 400 || res.status === 410) return null; // not a real purchase
+  if (!res.ok) throw new Error("google " + res.status);
+  return res.json();
+}
+
+/** Asks Google about a subscription. Returns { active, expiry } or null when it isn't ours. */
+async function playSubscription(env, token) {
+  const s = await googleGet(env, `subscriptionsv2/tokens/${encodeURIComponent(token)}`);
+  if (!s) return null;
+  const items = (s.lineItems || []).filter((l) => l.productId === env.PLAY_PLUS_ID);
+  if (!items.length) return null;
+  const expiry = Math.max(...items.map((l) => Math.floor(Date.parse(l.expiryTime) / 1000) || 0));
+  const active = ["SUBSCRIPTION_STATE_ACTIVE", "SUBSCRIPTION_STATE_IN_GRACE_PERIOD"].includes(s.subscriptionState) && expiry > now();
+  return { active, expiry };
+}
+
+/** Gives Plus for a Play subscription. A new paid period refills the monthly messages. */
+async function grantPlaySub(env, acc, token, sub) {
+  const db = env.DB;
+  const row = await db.prepare("SELECT account_id, expiry FROM play_purchases WHERE token = ?").bind(token).first();
+  const planMsgs = Number(env.PLAN_MESSAGES);
+  if (!sub.active) {
+    await db.prepare("UPDATE accounts SET plan = 'free', monthly_left = 0, plan_until = ?, play_checked_at = ? WHERE id = ? AND play_token = ?")
+      .bind(now(), now(), acc.id, token).run();
+    return false;
+  }
+  let left = planMsgs;
+  if (row && row.account_id !== acc.id) {
+    // The same Google account on a new install (or a restored key): move Plus across, with what was left.
+    const old = await db.prepare("SELECT monthly_left FROM accounts WHERE id = ?").bind(row.account_id).first();
+    if (row.expiry >= sub.expiry) left = old?.monthly_left ?? planMsgs;
+    await db.prepare("UPDATE accounts SET plan = 'free', monthly_left = 0, play_token = NULL WHERE id = ? AND play_token = ?")
+      .bind(row.account_id, token).run();
+  } else if (row && row.expiry >= sub.expiry) {
+    // Same period as before: nothing new, keep what is left.
+    left = null;
+  }
+  await db.prepare(
+    "INSERT INTO play_purchases (token, account_id, product, kind, expiry, created_at) VALUES (?, ?, ?, 'subs', ?, ?) " +
+    "ON CONFLICT(token) DO UPDATE SET account_id = excluded.account_id, expiry = excluded.expiry",
+  ).bind(token, acc.id, env.PLAY_PLUS_ID, sub.expiry, now()).run();
+  if (left === null) {
+    await db.prepare("UPDATE accounts SET plan = 'plus', plan_until = ?, play_token = ?, play_checked_at = ? WHERE id = ?")
+      .bind(sub.expiry, token, now(), acc.id).run();
+  } else {
+    await db.prepare("UPDATE accounts SET plan = 'plus', plan_until = ?, monthly_left = ?, play_token = ?, play_checked_at = ? WHERE id = ?")
+      .bind(sub.expiry, left, token, now(), acc.id).run();
+  }
+  return true;
+}
+
+async function playVerify(req, acc, env) {
+  if (!env.GOOGLE_PLAY_SA) return fail(503, "api_error", "Play payments aren't set up yet.");
+  let b;
+  try { b = await req.json(); } catch { return fail(400, "invalid_request_error", "Bad request"); }
+  const token = String(b.token || "");
+  if (token.length < 10 || token.length > 4096) return fail(400, "invalid_request_error", "Bad purchase");
+
+  if (b.kind === "subs") {
+    if (b.product !== env.PLAY_PLUS_ID) return fail(400, "invalid_request_error", "Unknown product");
+    // Already known for this account and still paid up: no need to ask Google again.
+    const known = await env.DB.prepare("SELECT expiry FROM play_purchases WHERE token = ? AND account_id = ?").bind(token, acc.id).first();
+    if (known && known.expiry > now() && acc.play_token === token) return json({ ok: true, plan: "plus", known: true });
+    const sub = await playSubscription(env, token);
+    if (!sub) return fail(402, "invalid_request_error", "Google Play doesn't know this purchase.");
+    const on = await grantPlaySub(env, acc, token, sub);
+    return on ? json({ ok: true, plan: "plus" }) : fail(402, "invalid_request_error", "This subscription has ended.");
+  }
+
+  if (b.kind === "inapp") {
+    if (b.product !== env.PLAY_TOPUP_ID) return fail(400, "invalid_request_error", "Unknown product");
+    const done = await env.DB.prepare("SELECT account_id FROM play_purchases WHERE token = ?").bind(token).first();
+    if (done) return json({ ok: true, repeat: true }); // counted already; the app can use it up now
+    const p = await googleGet(env, `products/${encodeURIComponent(b.product)}/tokens/${encodeURIComponent(token)}`);
+    if (!p || p.purchaseState !== 0) return fail(402, "invalid_request_error", "Google Play doesn't show this as paid.");
+    const qty = Math.max(1, Number(p.quantity) || 1);
+    const first = await env.DB.prepare(
+      "INSERT OR IGNORE INTO play_purchases (token, account_id, product, kind, created_at) VALUES (?, ?, ?, 'inapp', ?) RETURNING token",
+    ).bind(token, acc.id, b.product, now()).first();
+    if (first) {
+      await env.DB.prepare("UPDATE accounts SET pack_left = pack_left + ? WHERE id = ?").bind(Number(env.PACK_MESSAGES) * qty, acc.id).run();
+    }
+    return json({ ok: true });
+  }
+  return fail(400, "invalid_request_error", "Bad request");
+}
+
+/**
+ * Play doesn't tell us about renewals here, so when a Plus period has run out we ask Google once
+ * (at most every 10 minutes). A renewal refills the month; an ended subscription turns Plus off.
+ */
+async function playRenewal(acc, env) {
+  if (!acc.play_token || !env.GOOGLE_PLAY_SA) return acc;
+  if (acc.plan_until > now() || acc.play_checked_at > now() - 600) return acc;
+  try {
+    const sub = await playSubscription(env, acc.play_token);
+    if (sub) await grantPlaySub(env, acc, acc.play_token, sub);
+    else await env.DB.prepare("UPDATE accounts SET play_checked_at = ? WHERE id = ?").bind(now(), acc.id).run();
+    return (await env.DB.prepare("SELECT * FROM accounts WHERE id = ?").bind(acc.id).first()) || acc;
+  } catch {
+    return acc; // Google unreachable: try again later
+  }
+}
+
 // ---- routes ---------------------------------------------------------------------------------
 export default {
   async fetch(req, env, ctx) {
@@ -219,12 +362,15 @@ export default {
       if (req.method === "POST" && pathname === "/v1/register") return await register(req, env);
       if (req.method === "POST" && pathname === "/stripe/webhook") return await stripeWebhook(req, env);
 
-      const acc = await accountFor(req, env);
+      let acc = await accountFor(req, env);
       if (!acc) return fail(401, "authentication_error", "Sign in again in Settings.");
+      acc = await playRenewal(acc, env);
       if (req.method === "GET" && pathname === "/v1/account") return await account(acc, env);
       if (req.method === "POST" && pathname === "/v1/messages") return await messages(req, acc, env, ctx);
+      if (req.method === "POST" && pathname === "/v1/play/verify") return await playVerify(req, acc, env);
       return fail(404, "not_found_error", "Not found");
     } catch (e) {
+      console.error(e?.stack || e); // shows in Cloudflare's logs
       return fail(500, "api_error", "Server error. Try again.");
     }
   },

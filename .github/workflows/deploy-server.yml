@@ -1,6 +1,7 @@
 # Deploys the File Agent AI server to Cloudflare Workers (with its D1 database).
 # Needs these repository secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
 # OPENROUTER_API_KEY, and (after Stripe is set up) STRIPE_WEBHOOK_SECRET.
+# For Google Play payments: GOOGLE_PLAY_SA (the service account's JSON key).
 name: Deploy server
 on:
   push:
@@ -64,9 +65,11 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          GOOGLE_PLAY_SA: ${{ secrets.GOOGLE_PLAY_SA }}
         run: |
           if [ -n "$OPENROUTER_API_KEY" ]; then printf '%s' "$OPENROUTER_API_KEY" | npx wrangler secret put OPENROUTER_API_KEY; fi
           if [ -n "$STRIPE_WEBHOOK_SECRET" ]; then printf '%s' "$STRIPE_WEBHOOK_SECRET" | npx wrangler secret put STRIPE_WEBHOOK_SECRET; fi
+          if [ -n "$GOOGLE_PLAY_SA" ]; then printf '%s' "$GOOGLE_PLAY_SA" | npx wrangler secret put GOOGLE_PLAY_SA; fi
 
       - name: Check it answers
         if: steps.check.outputs.ready == 'true'

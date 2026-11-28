@@ -22,3 +22,7 @@ MODEL = "deepseek/deepseek-v4.1-flash"
 MAX_STEPS = "15"
 PER_MINUTE = "10"
 COST_CAP_USD = "5"
+# Google Play: the app's package and the product IDs set up in Play Console.
+PACKAGE = "dev.fileagent.app"
+PLAY_PLUS_ID = "plus_monthly"
+PLAY_TOPUP_ID = "topup_500"

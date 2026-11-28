@@ -11,6 +11,7 @@ work = "2.10.2"
 smbj = "0.13.0"
 smbjRpc = "0.12.13"
 litertlm = "0.20.0"
+billing = "8.0.0"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -31,6 +32,8 @@ activity-compose = { module = "androidx.activity:activity-compose", version.ref 
 lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+
+billing = { module = "com.android.billingclient:billing", version.ref = "billing" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -93,6 +93,8 @@ data class UiState(
     val nasShares: List<String>? = null,
     /** The paid File Agent AI account: messages left and where to pay. */
     val hosted: HostedState = HostedState(),
+    /** A short message about a payment (pending, failed, thank you). */
+    val payNote: String? = null,
     /** The on-phone AI model: not there, downloading, or ready. */
     val localModel: LocalModelState = LocalModelState(),
     /** Phone memory in GB, to warn when the on-phone AI may not fit. */
@@ -176,7 +178,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(appVersion = updater.installedName, ramGb = graph.localModel.ramGb) }
         watchLocalModel()
         refreshHosted()
-        checkUpdate(quiet = true)
+        if (BuildConfig.SELF_UPDATE) checkUpdate(quiet = true) // Play updates the Play version itself
         // Pin the answer, so leaving the first-run guide half way shows it again next time.
         if (!graph.onboarded) graph.onboarded = false
         checkNas()
@@ -281,14 +283,21 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Opens the Stripe checkout page in the browser. */
-    fun openPayment(link: String) {
-        if (link.isBlank()) return
-        val app = getApplication<Application>()
-        runCatching {
-            app.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(link))
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    /** Payments: Stripe links in the GitHub version, Google Play Billing in the Play version. */
+    val store: Store = makeStore(app, graph.hosted)
+
+    /** Starts buying Plus or a top-up. */
+    fun buy(activity: android.app.Activity, product: Product) {
+        viewModelScope.launch {
+            val note = store.buy(activity, product, _state.value.hosted)
+            _state.update { it.copy(payNote = note) }
         }
+    }
+
+    /** Loads prices and finishes half-done purchases. Called when the AI panel opens. */
+    fun syncStore() = store.sync { note ->
+        if (note != null) _state.update { it.copy(payNote = note) }
+        refreshHosted()
     }
 
     /** The account key, for the user to keep as a backup. */

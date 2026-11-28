@@ -97,6 +97,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -1309,8 +1310,11 @@ private fun SettingsScreen(vm: AgentViewModel, s: UiState) {
                 if (s.update != null) UpdateCard(vm, s)
                 else ListCard {
                     SettingRow("Version", s.appVersion, chevron = false)
-                    ListDivider(inset = SuiSpace.pad)
-                    SettingRow("Check for updates", s.updateStatus.orEmpty(), enabled = !s.updateBusy) { vm.checkUpdate() }
+                    // The Play version is updated by Google Play, so it has no update button.
+                    if (dev.fileagent.app.BuildConfig.SELF_UPDATE) {
+                        ListDivider(inset = SuiSpace.pad)
+                        SettingRow("Check for updates", s.updateStatus.orEmpty(), enabled = !s.updateBusy) { vm.checkUpdate() }
+                    }
                 }
             }
             Column {
@@ -1738,7 +1742,7 @@ private fun HostedPanel(vm: AgentViewModel, s: UiState) {
         lifecycle.addObserver(obs)
         onDispose { lifecycle.removeObserver(obs) }
     }
-    LaunchedEffect(Unit) { vm.refreshHosted(create = true) }
+    LaunchedEffect(Unit) { vm.refreshHosted(create = true); vm.syncStore() }
 
     Column(verticalArrangement = Arrangement.spacedBy(SuiSpace.inner)) {
         when {
@@ -1762,13 +1766,22 @@ private fun HostedPanel(vm: AgentViewModel, s: UiState) {
             }
         }
         if (h.signedUp) {
-            if (h.plan != "plus") PillButton("Get Plus · £4.99 a month", { vm.openPayment(h.planLink) }, Modifier.fillMaxWidth(),
-                primary = true, icon = Icons.Outlined.AutoAwesome, enabled = h.planLink.isNotBlank())
+            val prices by vm.store.prices.collectAsState()
+            val activity = ctx as? android.app.Activity
+            val canPlus = vm.store.ready(dev.fileagent.app.Product.Plus, h) && activity != null
+            val canTop = vm.store.ready(dev.fileagent.app.Product.TopUp, h) && activity != null
+            if (h.plan != "plus") PillButton(
+                prices[dev.fileagent.app.Product.Plus]?.let { "Get Plus · $it a month" } ?: "Get Plus",
+                { activity?.let { vm.buy(it, dev.fileagent.app.Product.Plus) } }, Modifier.fillMaxWidth(),
+                primary = true, icon = Icons.Outlined.AutoAwesome, enabled = canPlus)
             if (h.plan != "plus") Text("${h.planMessages} messages every month. Cancel any time.", style = SuiType.bodySm, color = c.textSoft)
-            PillButton("Top up · £2.99 for ${h.packMessages}", { vm.openPayment(h.packLink) }, Modifier.fillMaxWidth(),
-                enabled = h.packLink.isNotBlank())
+            PillButton(
+                prices[dev.fileagent.app.Product.TopUp]?.let { "Top up · $it for ${h.packMessages}" } ?: "Top up ${h.packMessages}",
+                { activity?.let { vm.buy(it, dev.fileagent.app.Product.TopUp) } }, Modifier.fillMaxWidth(),
+                enabled = canTop)
             Text("Top-ups never expire. One message can take a few AI steps; it counts as one.", style = SuiType.bodySm, color = c.textSoft)
-            if (h.planLink.isBlank()) Text("Payments open soon.", style = SuiType.bodySm, color = c.textSoft)
+            if (!canPlus && !canTop) Text("Payments open soon.", style = SuiType.bodySm, color = c.textSoft)
+            s.payNote?.let { Text(it, style = SuiType.bodySm, color = c.textSub) }
 
             // Backup, so a reinstall or a new phone keeps what was paid for.
             Row(horizontalArrangement = Arrangement.spacedBy(SuiSpace.inner)) {

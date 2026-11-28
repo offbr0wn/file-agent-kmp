@@ -4,3 +4,7 @@ local.properties
 .idea/
 *.iml
 .kotlin/
+
+# Signing keys come from CI secrets, never the repo.
+*.keystore
+*.jks

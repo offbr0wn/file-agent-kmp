@@ -18,9 +18,36 @@ android {
         // Modern phones are all 64-bit ARM. Shipping only that keeps the download small.
         ndk { abiFilters += "arm64-v8a" }
     }
+    // Two versions of the app:
+    // - github: the APK on GitHub releases. Updates itself, takes card payments by Stripe link.
+    // - play: Google Play. Play updates it, payments go through Google Play Billing.
+    flavorDimensions += "store"
+    productFlavors {
+        create("github") {
+            dimension = "store"
+            buildConfigField("boolean", "SELF_UPDATE", "true")
+            buildConfigField("String", "STORE", "\"github\"")
+        }
+        create("play") {
+            dimension = "store"
+            buildConfigField("boolean", "SELF_UPDATE", "false")
+            buildConfigField("String", "STORE", "\"play\"")
+        }
+    }
     // Fixed debug key (decoded by CI from debug.keystore.b64) so every build can
     // update the app already on the phone. Falls back to the normal debug key locally.
     signingConfigs {
+        // Play upload key (decoded by CI from PLAY_UPLOAD_KEYSTORE_B64). Google re-signs the app
+        // with its own key, so this one only proves an upload came from us.
+        create("upload") {
+            val ks = file("upload.keystore")
+            if (ks.exists()) {
+                storeFile = ks
+                storePassword = System.getenv("PLAY_UPLOAD_PASSWORD") ?: ""
+                keyAlias = "upload"
+                keyPassword = System.getenv("PLAY_UPLOAD_PASSWORD") ?: ""
+            }
+        }
         getByName("debug") {
             val ks = file("debug.keystore")
             if (ks.exists()) {
@@ -39,8 +66,12 @@ android {
             isMinifyEnabled = false
         }
     }
+    // The Play version is signed with the upload key when CI has it.
+    if (file("upload.keystore").exists()) {
+        productFlavors.getByName("play").signingConfig = signingConfigs.getByName("upload")
+    }
     lint { checkReleaseBuilds = false; abortOnError = false }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     packaging {
         resources {
             // Duplicate metadata from the SMB library's crypto dependencies.
@@ -77,4 +108,5 @@ dependencies {
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.work.runtime)
     implementation(libs.coroutines.core)
+    "playImplementation"(libs.billing) // Google Play Billing, Play version only
 }

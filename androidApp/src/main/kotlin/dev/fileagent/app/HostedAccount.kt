@@ -5,6 +5,9 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.content.TextContent
+import io.ktor.http.ContentType
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +71,32 @@ class HostedAccount(private val http: HttpClient, private val prefs: SharedPrefe
         )
     }
 
+    /**
+     * A tag for this account that Google Play keeps with each purchase. It is the same hash our
+     * server stores, so the key itself never leaves the phone.
+     */
+    fun accountTag(): String {
+        val d = java.security.MessageDigest.getInstance("SHA-256").digest(token.toByteArray())
+        return d.joinToString("") { "%02x".format(it) }
+    }
+
+    /** The Plus purchase this phone last had confirmed, so it isn't checked again on every start. */
+    var lastPlayToken: String
+        get() = prefs.getString(PLAY_KEY, "") ?: ""
+        set(v) = prefs.edit().putString(PLAY_KEY, v).apply()
+
+    /** Sends a Google Play purchase to our server, which checks it with Google and adds the messages. */
+    suspend fun verifyPlay(purchaseToken: String, productId: String, kind: String) = withContext(Dispatchers.IO) {
+        val t = ensure()
+        val body = JSONObject().put("token", purchaseToken).put("product", productId).put("kind", kind).toString()
+        val res = http.post("$SERVER/v1/play/verify") {
+            header("authorization", "Bearer $t")
+            setBody(TextContent(body, ContentType.Application.Json))
+        }
+        val text = res.bodyAsText()
+        if (!res.status.isSuccess()) error(message(text) ?: "Couldn't confirm the purchase")
+    }
+
     private fun message(text: String): String? =
         runCatching { JSONObject(text).getJSONObject("error").getString("message") }.getOrNull()
 
@@ -75,5 +104,6 @@ class HostedAccount(private val http: HttpClient, private val prefs: SharedPrefe
         /** The File Agent AI server (Cloudflare Worker). */
         const val SERVER = "https://file-agent.SUBDOMAIN.workers.dev"
         private const val KEY = "hosted_token"
+        private const val PLAY_KEY = "play_plus_token"
     }
 }

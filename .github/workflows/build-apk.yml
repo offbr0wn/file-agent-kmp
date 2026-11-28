@@ -16,6 +16,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Only used to decide whether to send the bundle to Play.
+      PLAY_SA: ${{ secrets.GOOGLE_PLAY_SA }}
     permissions:
       contents: write
     steps:
@@ -45,19 +48,49 @@ jobs:
       - name: Run tests
         run: ./gradlew :shared:testDebugUnitTest --stacktrace
 
-      - name: Build APK
-        run: ./gradlew :androidApp:assembleRelease --stacktrace
+      # The Play version is signed with the Play upload key when it is set up.
+      # Without it, the bundle is signed with the GitHub key and can only be used for testing.
+      - name: Use Play upload key
+        env:
+          PLAY_UPLOAD_KEYSTORE_B64: ${{ secrets.PLAY_UPLOAD_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$PLAY_UPLOAD_KEYSTORE_B64" ]; then
+            echo "$PLAY_UPLOAD_KEYSTORE_B64" | base64 -d > androidApp/upload.keystore
+          else
+            echo "::warning::PLAY_UPLOAD_KEYSTORE_B64 is not set. The Play bundle is not upload-ready."
+          fi
+
+      - name: Build GitHub APK and Play bundle
+        env:
+          PLAY_UPLOAD_PASSWORD: ${{ secrets.PLAY_UPLOAD_PASSWORD }}
+        run: ./gradlew :androidApp:assembleGithubRelease :androidApp:bundlePlayRelease --stacktrace
+
+      # The Play version must not be able to install apps or update itself.
+      - name: Check the Play version has no install permission
+        run: |
+          M=androidApp/build/intermediates/merged_manifests/playRelease/processPlayReleaseManifest/AndroidManifest.xml
+          [ -f "$M" ] || M=$(find androidApp/build/intermediates -path '*playRelease*' -name AndroidManifest.xml | head -1)
+          echo "Checking $M"
+          if grep -q REQUEST_INSTALL_PACKAGES "$M"; then echo "Play manifest has REQUEST_INSTALL_PACKAGES"; exit 1; fi
+          if grep -q REQUEST_INSTALL_PACKAGES <(find androidApp/build/intermediates -path '*githubRelease*' -name AndroidManifest.xml -exec cat {} +); then echo "GitHub version keeps its updater: ok"; fi
+
+      - name: Collect the APK and bundle
+        run: |
+          mkdir -p /tmp/out
+          cp androidApp/build/outputs/apk/github/release/*.apk /tmp/out/FileAgent.apk
+          cp androidApp/build/outputs/bundle/playRelease/*.aab /tmp/out/FileAgent-play.aab
+          ls -l /tmp/out
 
       - uses: actions/upload-artifact@v5
         with:
           name: FileAgent-apk
-          path: androidApp/build/outputs/apk/release/*.apk
+          path: /tmp/out/FileAgent.apk
 
-      - name: Collect the APK
-        run: |
-          mkdir -p /tmp/out
-          cp androidApp/build/outputs/apk/release/*.apk /tmp/out/FileAgent.apk
-          ls -l /tmp/out
+      # Download this from the run page and upload it in Play Console (the first upload is by hand).
+      - uses: actions/upload-artifact@v5
+        with:
+          name: FileAgent-play-aab
+          path: /tmp/out/FileAgent-play.aab
 
       # Every build becomes a GitHub release with the APK attached.
       - name: Publish GitHub release
@@ -72,3 +105,16 @@ jobs:
             --title "File Agent build ${GITHUB_RUN_NUMBER}" \
             --notes "$(git log -1 --format=%B | grep -v -E '^(Co-Authored-By|Claude-Session):')" \
             --latest
+
+      # After the first manual upload, each main build goes to the closed test by itself,
+      # so testers always get the newest version. Needs the PLAY_SERVICE_ACCOUNT secret.
+      - name: Send to Play closed test
+        if: github.ref == 'refs/heads/main' && env.PLAY_SA != ''
+        continue-on-error: true
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SA }}
+          packageName: dev.fileagent.app
+          releaseFiles: /tmp/out/FileAgent-play.aab
+          track: alpha
+          status: completed
